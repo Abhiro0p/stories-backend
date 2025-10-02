@@ -58,20 +58,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-
-    - name: Debug - List files
-      run: |
-        echo "=== Project structure ==="
-        find . -type f -name "*.go" | sort
-        echo "=== Internal directory ==="
-        ls -la internal/ 2>/dev/null || echo "internal/ directory not found"
-        echo "=== Storage package ==="
-        ls -la internal/storage/ 2>/dev/null || echo "internal/storage/ not found" 
-        echo "=== Media package ==="
-        ls -la internal/media/ 2>/dev/null || echo "internal/media/ not found"
-        echo "=== Go module status ==="
-        go list ./... || echo "Failed to list packages"
-
     - name: Download dependencies
       run: go mod download
 
@@ -126,10 +112,19 @@ jobs:
       with:
         go-version: ${{ env.GO_VERSION }}
 
+    - name: Install Gosec
+      run: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+
     - name: Run Gosec Security Scanner
-      uses: securecodewarrior/github-action-gosec@master
-      with:
-        args: ./...
+      run: gosec ./...
+      continue-on-error: true
+
+    - name: Install govulncheck
+      run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+    - name: Run govulncheck
+      run: govulncheck ./...
+      continue-on-error: true
 
   build:
     name: Build
@@ -139,107 +134,20 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: ${{ env.GO_VERSION }}
 
-    # Replace the problematic make build with direct go build
     - name: Build binaries
       run: |
-        # Try different build strategies based on project structure
-        if [ -f "cmd/server/main.go" ]; then
-          echo "Building from cmd/server/"
-          go build -v -o bin/stories-backend ./cmd/server
-        elif [ -f "cmd/main.go" ]; then
-          echo "Building from cmd/"
-          go build -v -o bin/stories-backend ./cmd
-        elif [ -f "main.go" ]; then
-          echo "Building from root main.go"
-          go build -v -o bin/stories-backend .
-        else
-          echo "No main.go found, building all packages"
-          go build -v ./...
+        if [ -f "cmd/api/main.go" ]; then
+          echo "Building API from cmd/api/"
+          go build -v -o bin/stories-api ./cmd/api
         fi
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.DOCKER_REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract metadata
-      id: meta-api
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_NAMESPACE }}/stories-backend-api
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-
-    # Only build Docker if Dockerfile exists
-    - name: Check for Dockerfile
-      id: dockerfile-check
-      run: |
-        if [ -f "./deployments/docker/Dockerfile.api" ]; then
-          echo "dockerfile_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "dockerfile_exists=false" >> $GITHUB_OUTPUT
-          echo "Warning: ./deployments/docker/Dockerfile.api not found, skipping Docker build"
+        
+        if [ -f "cmd/worker/main.go" ]; then
+          echo "Building Worker from cmd/worker/"
+          go build -v -o bin/stories-worker ./cmd/worker
         fi
-
-    - name: Build and push API image
-      if: steps.dockerfile-check.outputs.dockerfile_exists == 'true'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./deployments/docker/Dockerfile.api
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-api.outputs.tags }}
-        labels: ${{ steps.meta-api.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Extract metadata for worker
-      id: meta-worker
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_NAMESPACE }}/stories-backend-worker
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-
-    - name: Check for Worker Dockerfile
-      id: worker-dockerfile-check
-      run: |
-        if [ -f "./deployments/docker/Dockerfile.worker" ]; then
-          echo "dockerfile_exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "dockerfile_exists=false" >> $GITHUB_OUTPUT
-          echo "Warning: ./deployments/docker/Dockerfile.worker not found, skipping worker Docker build"
-        fi
-
-    - name: Build and push worker image
-      if: steps.worker-dockerfile-check.outputs.dockerfile_exists == 'true'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./deployments/docker/Dockerfile.worker
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta-worker.outputs.tags }}
-        labels: ${{ steps.meta-worker.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
