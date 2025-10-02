@@ -58,7 +58,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    # 🔍 DEBUG STEP: Check what files actually exist
+
     - name: Debug - List files
       run: |
         echo "=== Project structure ==="

@@ -1,0 +1,21 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters-settings:
+  errcheck:
+    # Don't check error for these functions
+    ignore: github.com/go-playground/validator/v10.(*Validate).RegisterValidation
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+    - deadcode
+    - varcheck
+  disable:
+    - errcheck
