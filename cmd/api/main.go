@@ -7,11 +7,13 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "runtime"
     "syscall"
     "time"
 
     "github.com/gin-gonic/gin"
     "github.com/prometheus/client_golang/prometheus/promhttp"
+    "go.uber.org/zap"
 
     "github.com/Abhiro0p/stories-backend/internal/auth"
     "github.com/Abhiro0p/stories-backend/internal/handlers"
@@ -28,7 +30,7 @@ var (
     Version   = "dev"
     Commit    = "unknown"
     BuildTime = "unknown"
-    GoVersion = "unknown"
+    GoVersion = runtime.Version()
 )
 
 func main() {
@@ -45,12 +47,15 @@ func main() {
     }
     defer zapLogger.Sync()
 
+    // ✅ FIXED: Use proper zap field constructors
     zapLogger.Info("Starting Stories Backend API",
-        "version", Version,
-        "commit", Commit,
-        "build_time", BuildTime,
-        "go_version", GoVersion,
-        "environment", cfg.Environment,
+        zap.String("version", Version),
+        zap.String("commit", Commit),
+        zap.String("build_time", BuildTime),
+        zap.String("go_version", GoVersion),
+        zap.String("environment", cfg.Environment),
+        zap.String("port", cfg.Port),
+        zap.String("api_prefix", cfg.APIPrefix),
     )
 
     // Initialize metrics
@@ -59,14 +64,15 @@ func main() {
     // Initialize database
     db, err := storage.NewPostgresDB(cfg, zapLogger)
     if err != nil {
-        zapLogger.Fatal("Failed to initialize database", "error", err)
+        
+        zapLogger.Fatal("Failed to initialize database", zap.Error(err))
     }
     defer db.Close()
 
     // Initialize Redis
     redisClient, err := storage.NewRedisClient(cfg, zapLogger)
     if err != nil {
-        zapLogger.Fatal("Failed to initialize Redis", "error", err)
+        zapLogger.Fatal("Failed to initialize Redis", zap.Error(err))
     }
     defer redisClient.Close()
 
@@ -77,22 +83,27 @@ func main() {
     viewStore := storage.NewViewStore(db.DB(), redisClient, zapLogger)
     reactionStore := storage.NewReactionStore(db.DB(), redisClient, zapLogger)
 
+    zapLogger.Info("Storage layer initialized successfully")
+
     // Initialize auth service
     authService := auth.NewService(cfg, userStore, zapLogger)
 
     // Initialize media service
     mediaService, err := media.NewService(cfg, zapLogger)
     if err != nil {
-        zapLogger.Fatal("Failed to initialize media service", "error", err)
+        zapLogger.Fatal("Failed to initialize media service", zap.Error(err))
     }
 
     // Initialize WebSocket hub
     wsHub := realtime.NewHub(zapLogger)
     go wsHub.Run()
 
+    zapLogger.Info("WebSocket hub started")
+
     // Setup Gin router
     if cfg.Environment == "production" {
         gin.SetMode(gin.ReleaseMode)
+        zapLogger.Info("Gin set to release mode")
     }
 
     router := gin.New()
@@ -105,6 +116,8 @@ func main() {
 
     // Rate limiting middleware
     router.Use(middleware.RateLimit(redisClient, cfg.RateLimit))
+
+    zapLogger.Info("Middleware configured successfully")
 
     // Health check endpoint
     healthHandler := handlers.NewHealthHandler(db, redisClient, zapLogger)
@@ -133,6 +146,7 @@ func main() {
         authGroup.POST("/verify-email", authHandler.VerifyEmail)
         authGroup.POST("/forgot-password", authHandler.ForgotPassword)
         authGroup.POST("/reset-password", authHandler.ResetPassword)
+        authGroup.PUT("/change-password", auth.RequireAuth(authService), authHandler.ChangePassword)
     }
 
     // Protected routes
@@ -179,6 +193,10 @@ func main() {
         mediaGroup.DELETE("/:key", mediaHandler.DeleteMedia)
     }
 
+    zapLogger.Info("Routes configured successfully",
+        zap.Int("total_routes", len(router.Routes())),
+    )
+
     // Create HTTP server
     server := &http.Server{
         Addr:    fmt.Sprintf(":%s", cfg.Port),
@@ -192,34 +210,60 @@ func main() {
     }
 
     // Start server in goroutine
+    serverErrCh := make(chan error, 1)
     go func() {
-        zapLogger.Info("Starting HTTP server", "port", cfg.Port)
+        zapLogger.Info("Starting HTTP server", 
+            zap.String("port", cfg.Port),
+            zap.String("address", server.Addr),
+        )
+        
         if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            zapLogger.Fatal("Failed to start server", "error", err)
+            zapLogger.Error("HTTP server failed", zap.Error(err))
+            serverErrCh <- err
         }
     }()
 
     // Start metrics server
+    var metricsServer *http.Server
     if cfg.PrometheusEnabled {
-        metricsServer := &http.Server{
+        metricsServer = &http.Server{
             Addr:    fmt.Sprintf(":%s", cfg.PrometheusPort),
             Handler: promhttp.Handler(),
         }
 
         go func() {
-            zapLogger.Info("Starting metrics server", "port", cfg.PrometheusPort)
+            zapLogger.Info("Starting metrics server", 
+                zap.String("port", cfg.PrometheusPort),
+                zap.String("endpoint", "/metrics"),
+            )
+            
             if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-                zapLogger.Error("Metrics server error", "error", err)
+                zapLogger.Error("Metrics server error", zap.Error(err))
             }
         }()
     }
 
-    // Wait for interrupt signal
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
+    zapLogger.Info("All services started successfully",
+        zap.Bool("metrics_enabled", cfg.PrometheusEnabled),
+        zap.Bool("websocket_enabled", true),
+        zap.String("environment", cfg.Environment),
+    )
 
-    zapLogger.Info("Shutting down server...")
+    // Wait for interrupt signal or server error
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+    
+    select {
+    case sig := <-quit:
+        zapLogger.Info("Shutdown signal received", 
+            zap.String("signal", sig.String()),
+        )
+    case err := <-serverErrCh:
+        zapLogger.Error("Server error, shutting down", zap.Error(err))
+    }
+
+    zapLogger.Info("Initiating graceful shutdown")
+    shutdownStart := time.Now()
 
     // Create shutdown context with timeout
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -227,11 +271,21 @@ func main() {
 
     // Shutdown HTTP server
     if err := server.Shutdown(ctx); err != nil {
-        zapLogger.Error("Server forced to shutdown", "error", err)
+        zapLogger.Error("Server forced to shutdown", zap.Error(err))
+    }
+
+    // Shutdown metrics server
+    if metricsServer != nil {
+        if err := metricsServer.Shutdown(ctx); err != nil {
+            zapLogger.Error("Metrics server forced to shutdown", zap.Error(err))
+        }
     }
 
     // Close WebSocket hub
     wsHub.Shutdown()
 
-    zapLogger.Info("Server exited")
+    zapLogger.Info("Server exited gracefully",
+        zap.Duration("shutdown_duration", time.Since(shutdownStart)),
+        zap.String("status", "success"),
+    )
 }

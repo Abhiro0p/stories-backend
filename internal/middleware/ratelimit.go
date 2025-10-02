@@ -8,7 +8,6 @@ import (
     "time"
 
     "github.com/gin-gonic/gin"
-    "github.com/redis/go-redis/v9"
     "go.uber.org/zap"
 
     "github.com/Abhiro0p/stories-backend/internal/storage"

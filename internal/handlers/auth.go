@@ -197,7 +197,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
         return
     }
 
-    var req models.PasswordChangeRequest
+    var req models.ChangePasswordRequest
     if err := c.ShouldBindJSON(&req); err != nil {
         h.logger.Warn("Invalid password change request", zap.Error(err))
         c.JSON(http.StatusBadRequest, gin.H{
@@ -239,7 +239,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 // ForgotPassword handles password reset request
 func (h *AuthHandler) ForgotPassword(c *gin.Context) {
-    var req models.PasswordResetRequest
+    var req models.ForgotPasswordRequest
     if err := c.ShouldBindJSON(&req); err != nil {
         h.logger.Warn("Invalid forgot password request", zap.Error(err))
         c.JSON(http.StatusBadRequest, gin.H{
@@ -264,7 +264,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 
 // ResetPassword handles password reset confirmation
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
-    var req models.PasswordResetConfirmRequest
+    var req models.ResetPasswordRequest
     if err := c.ShouldBindJSON(&req); err != nil {
         h.logger.Warn("Invalid reset password request", zap.Error(err))
         c.JSON(http.StatusBadRequest, gin.H{

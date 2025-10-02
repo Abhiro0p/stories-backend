@@ -2,9 +2,8 @@ package realtime
 
 import (
     "encoding/json"
-    "net/http"
     "time"
-
+    
     "github.com/gorilla/websocket"
     "go.uber.org/zap"
 
@@ -122,6 +121,11 @@ func (c *Client) WritePump() {
 
 // Send sends an event to the client
 func (c *Client) Send(event *Event) {
+    // Add timestamp if not set
+    if event.Timestamp == 0 {
+        event.Timestamp = time.Now().Unix()
+    }
+    
     data, err := json.Marshal(event)
     if err != nil {
         c.logger.Error("Failed to marshal event",
@@ -170,7 +174,7 @@ func (c *Client) handleMessage(message []byte) {
     switch incomingEvent.Type {
     case EventPing:
         c.handlePing()
-    case EventStoryView:
+    case EventStoryViewed:  // ✅ CHANGED FROM EventStoryView to EventStoryViewed
         c.handleStoryView(incomingEvent.Payload)
     case EventTyping:
         c.handleTyping(incomingEvent.Payload)

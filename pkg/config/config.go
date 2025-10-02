@@ -51,8 +51,8 @@ type Config struct {
     LogLevel  string `mapstructure:"LOG_LEVEL"`
     LogFormat string `mapstructure:"LOG_FORMAT"`
     
-    // Worker configuration
-    Worker WorkerConfig `mapstructure:",squash"`
+    // Worker configuration - UPDATED to match your env vars
+    Workers WorkersConfig `mapstructure:",squash"`
     
     // Prometheus configuration
     PrometheusEnabled bool   `mapstructure:"PROMETHEUS_ENABLED"`
@@ -93,12 +93,31 @@ type CORSConfig struct {
     MaxAge          int      `mapstructure:"CORS_MAX_AGE"`
 }
 
-// WorkerConfig holds worker configuration
+// WorkerConfig represents configuration for a single worker
 type WorkerConfig struct {
-    PollInterval time.Duration `mapstructure:"WORKER_POLL_INTERVAL"`
-    BatchSize    int           `mapstructure:"WORKER_BATCH_SIZE"`
-    MaxRetries   int           `mapstructure:"WORKER_MAX_RETRIES"`
-    Timeout      time.Duration `mapstructure:"WORKER_TIMEOUT"`
+    Enabled     bool          `mapstructure:"enabled" json:"enabled"`
+    Interval    time.Duration `mapstructure:"interval" json:"interval"`
+    BatchSize   int           `mapstructure:"batch_size" json:"batch_size"`
+    Workers     int           `mapstructure:"workers" json:"workers"`        // For queue concurrency
+    Concurrency int           `mapstructure:"concurrency" json:"concurrency"` // Alternative name for workers
+    MaxRetries  int           `mapstructure:"max_retries" json:"max_retries"`
+    Timeout     time.Duration `mapstructure:"timeout" json:"timeout"`
+}
+
+// WorkersConfig represents all worker configurations - UPDATED to match your env vars
+type WorkersConfig struct {
+    // Expiration worker (matches EXPIRATION_WORKER_* env vars)
+    StoryExpiration WorkerConfig `mapstructure:"expiration_worker" json:"expiration_worker"`
+    
+    // Queue worker (matches QUEUE_WORKER_* env vars)
+    Queue WorkerConfig `mapstructure:"queue_worker" json:"queue_worker"`
+    
+    // Additional workers with default names
+    CacheCleanup  WorkerConfig `mapstructure:"cache_cleanup" json:"cache_cleanup"`
+    UserStats     WorkerConfig `mapstructure:"user_stats" json:"user_stats"`
+    Notifications WorkerConfig `mapstructure:"notifications" json:"notifications"`
+    Analytics     WorkerConfig `mapstructure:"analytics" json:"analytics"`
+    HealthCheck   WorkerConfig `mapstructure:"health_check" json:"health_check"`
 }
 
 // Load loads configuration from environment variables and config files
@@ -122,12 +141,31 @@ func Load() (*Config, error) {
         return nil, fmt.Errorf("failed to unmarshal config: %w", err)
     }
     
+    // Post-process worker configs to handle different field names
+    normalizeWorkerConfigs(&config)
+    
     // Validate required fields
     if err := validateConfig(&config); err != nil {
         return nil, fmt.Errorf("config validation failed: %w", err)
     }
     
     return &config, nil
+}
+
+// normalizeWorkerConfigs handles different naming conventions
+func normalizeWorkerConfigs(config *Config) {
+    // For queue worker, if Concurrency is set but Workers is not, use Concurrency as Workers
+    if config.Workers.Queue.Concurrency > 0 && config.Workers.Queue.Workers == 0 {
+        config.Workers.Queue.Workers = config.Workers.Queue.Concurrency
+    }
+    
+    // Set defaults for unset values
+    if config.Workers.StoryExpiration.Interval == 0 {
+        config.Workers.StoryExpiration.Interval = 5 * time.Minute
+    }
+    if config.Workers.Queue.Interval == 0 {
+        config.Workers.Queue.Interval = 5 * time.Second
+    }
 }
 
 // setDefaults sets default configuration values
@@ -177,15 +215,55 @@ func setDefaults() {
     viper.SetDefault("LOG_LEVEL", "info")
     viper.SetDefault("LOG_FORMAT", "json")
     
-    // Worker defaults
-    viper.SetDefault("WORKER_POLL_INTERVAL", "30s")
-    viper.SetDefault("WORKER_BATCH_SIZE", 100)
-    viper.SetDefault("WORKER_MAX_RETRIES", 3)
-    viper.SetDefault("WORKER_TIMEOUT", "300s")
+    // Worker defaults - UPDATED to match your env var names
+    setWorkerDefaults()
     
     // Prometheus defaults
     viper.SetDefault("PROMETHEUS_ENABLED", true)
     viper.SetDefault("PROMETHEUS_PORT", "9090")
+}
+
+// setWorkerDefaults sets worker-specific defaults - UPDATED
+func setWorkerDefaults() {
+    // Expiration worker (matches your EXPIRATION_WORKER_* env vars)
+    viper.SetDefault("EXPIRATION_WORKER_ENABLED", true)
+    viper.SetDefault("EXPIRATION_WORKER_INTERVAL", "60s")
+    viper.SetDefault("EXPIRATION_WORKER_BATCH_SIZE", 1000)
+    viper.SetDefault("EXPIRATION_WORKER_TIMEOUT", "30s")
+    viper.SetDefault("EXPIRATION_WORKER_MAX_RETRIES", 3)
+    
+    // Queue worker (matches your QUEUE_WORKER_* env vars)
+    viper.SetDefault("QUEUE_WORKER_ENABLED", true)
+    viper.SetDefault("QUEUE_WORKER_INTERVAL", "5s")
+    viper.SetDefault("QUEUE_WORKER_CONCURRENCY", 5)
+    viper.SetDefault("QUEUE_WORKER_TIMEOUT", "5m")
+    viper.SetDefault("QUEUE_WORKER_MAX_RETRIES", 3)
+    
+    // Additional workers with default values
+    viper.SetDefault("CACHE_CLEANUP_ENABLED", true)
+    viper.SetDefault("CACHE_CLEANUP_INTERVAL", "1h")
+    viper.SetDefault("CACHE_CLEANUP_BATCH_SIZE", 1000)
+    viper.SetDefault("CACHE_CLEANUP_TIMEOUT", "10m")
+    
+    viper.SetDefault("USER_STATS_ENABLED", true)
+    viper.SetDefault("USER_STATS_INTERVAL", "10m")
+    viper.SetDefault("USER_STATS_BATCH_SIZE", 50)
+    viper.SetDefault("USER_STATS_TIMEOUT", "5m")
+    
+    viper.SetDefault("NOTIFICATIONS_ENABLED", true)
+    viper.SetDefault("NOTIFICATIONS_INTERVAL", "1s")
+    viper.SetDefault("NOTIFICATIONS_CONCURRENCY", 3)
+    viper.SetDefault("NOTIFICATIONS_MAX_RETRIES", 5)
+    viper.SetDefault("NOTIFICATIONS_TIMEOUT", "30s")
+    
+    viper.SetDefault("ANALYTICS_ENABLED", true)
+    viper.SetDefault("ANALYTICS_INTERVAL", "15m")
+    viper.SetDefault("ANALYTICS_BATCH_SIZE", 200)
+    viper.SetDefault("ANALYTICS_TIMEOUT", "10m")
+    
+    viper.SetDefault("HEALTH_CHECK_ENABLED", true)
+    viper.SetDefault("HEALTH_CHECK_INTERVAL", "30s")
+    viper.SetDefault("HEALTH_CHECK_TIMEOUT", "10s")
 }
 
 // validateConfig validates the configuration

@@ -572,7 +572,7 @@ func (h *StoryHandler) AddReaction(c *gin.Context) {
     }
 
     // Validate reaction type
-    if !models.ValidateReactionType(req.Type) {
+    if !models.ValidateReactionType(string(req.Type)) {
         c.JSON(http.StatusBadRequest, gin.H{
             "error":   "invalid_reaction",
             "message": "Invalid reaction type",
@@ -687,7 +687,7 @@ func (h *StoryHandler) UpdateReaction(c *gin.Context) {
     }
 
     // Validate reaction type
-    if !models.ValidateReactionType(req.Type) {
+    if !models.ValidateReactionType(string(req.Type)) {
         c.JSON(http.StatusBadRequest, gin.H{
             "error":   "invalid_reaction",
             "message": "Invalid reaction type",

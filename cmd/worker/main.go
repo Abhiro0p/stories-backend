@@ -2,17 +2,18 @@ package main
 
 import (
     "context"
-    "log"
     "os"
     "os/signal"
     "syscall"
     "time"
 
+    "go.uber.org/zap"
+
     "github.com/Abhiro0p/stories-backend/internal/worker"
     "github.com/Abhiro0p/stories-backend/pkg/config"
-    "github.com/Abhiro0p/stories-backend/pkg/logger"
 )
 
+// Build information (set via ldflags during build)
 var (
     Version   = "dev"
     Commit    = "unknown"
@@ -21,59 +22,65 @@ var (
 )
 
 func main() {
+    // Initialize logger
+    logger, err := zap.NewProduction()
+    if err != nil {
+        panic(err)
+    }
+    defer logger.Sync()
+
     // Load configuration
     cfg, err := config.Load()
     if err != nil {
-        log.Fatalf("Failed to load configuration: %v", err)
+        // ✅ FIXED: Use zap.Error() for error values
+        logger.Fatal("Failed to load configuration", zap.Error(err))
     }
 
-    // Initialize logger
-    zapLogger, err := logger.New(cfg.LogLevel, cfg.LogFormat)
-    if err != nil {
-        log.Fatalf("Failed to initialize logger: %v", err)
-    }
-    defer zapLogger.Sync()
-
-    zapLogger.Info("Starting Stories Backend Worker", 
-        "version", Version,
-        "commit", Commit,
-        "build_time", BuildTime,
-        "go_version", GoVersion,
-        "environment", cfg.Environment,
+    // ✅ FIXED: Use proper zap field constructors
+    logger.Info("Starting Stories Backend Worker",
+        zap.String("version", Version),      // Use zap.String()
+        zap.String("commit", Commit),        // Use zap.String()
+        zap.String("build_time", BuildTime), // Use zap.String()
+        zap.String("go_version", GoVersion), // Use zap.String()
+        zap.String("environment", cfg.Environment), // Use zap.String()
     )
 
     // Create worker manager
-    workerManager, err := worker.NewManager(cfg, zapLogger)
+    manager, err := worker.NewManager(cfg, logger)
     if err != nil {
-        zapLogger.Fatal("Failed to create worker manager", "error", err)
+        // ✅ FIXED: Use zap.Error() for error values
+        logger.Fatal("Failed to create worker manager", zap.Error(err))
     }
 
     // Create context for graceful shutdown
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
 
-    // Start worker manager
-    if err := workerManager.Start(ctx); err != nil {
-        zapLogger.Fatal("Failed to start worker manager", "error", err)
-    }
+    // Start workers
+    go func() {
+        if err := manager.Start(ctx); err != nil {
+            // ✅ FIXED: Use zap.Error() for error values
+            logger.Error("Worker manager failed", zap.Error(err))
+        }
+    }()
 
-    zapLogger.Info("Worker manager started successfully")
+    logger.Info("Worker manager started successfully")
 
-    // Wait for interrupt signal to gracefully shutdown the worker
+    // Wait for shutdown signal
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    
     <-quit
+    logger.Info("Shutdown signal received")
 
-    zapLogger.Info("Shutting down worker...")
-
-    // Create shutdown context with timeout
+    // Graceful shutdown with timeout
     shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer shutdownCancel()
 
-    // Shutdown worker manager
-    if err := workerManager.Shutdown(shutdownCtx); err != nil {
-        zapLogger.Error("Worker manager shutdown error", "error", err)
-    } else {
-        zapLogger.Info("Worker manager stopped gracefully")
+    if err := manager.Shutdown(shutdownCtx); err != nil {
+        // ✅ FIXED: Use zap.Error() for error values
+        logger.Error("Failed to shutdown worker manager gracefully", zap.Error(err))
     }
+
+    logger.Info("Worker shutdown complete")
 }

@@ -2,7 +2,7 @@ package middleware
 
 import (
     "time"
-
+    "fmt"
     "github.com/gin-gonic/gin"
     "go.uber.org/zap"
 )

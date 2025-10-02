@@ -1,6 +1,7 @@
 package handlers
 
 import (
+    "context"
     "net/http"
     "time"
 
@@ -41,7 +42,7 @@ func (h *HealthHandler) Health(c *gin.Context) {
 
     // If detailed query parameter is provided, include dependency checks
     if c.Query("detailed") == "true" {
-        dependencies := h.checkDependencies()
+        dependencies := h.checkDependencies(c.Request.Context())
         response["dependencies"] = dependencies
 
         // Check if any dependency is down
@@ -60,7 +61,7 @@ func (h *HealthHandler) Health(c *gin.Context) {
 
 // Ready checks if the service is ready to accept traffic
 func (h *HealthHandler) Ready(c *gin.Context) {
-    dependencies := h.checkDependencies()
+    dependencies := h.checkDependencies(c.Request.Context())
     
     // Service is ready only if all critical dependencies are healthy
     ready := true
@@ -93,12 +94,12 @@ func (h *HealthHandler) Live(c *gin.Context) {
     })
 }
 
-// checkDependencies checks the health of all dependencies
-func (h *HealthHandler) checkDependencies() []gin.H {
+// checkDependencies checks the health of all dependencies - FIXED: Added ctx parameter
+func (h *HealthHandler) checkDependencies(ctx context.Context) []gin.H {
     dependencies := []gin.H{}
 
     // Check PostgreSQL
-    dbStatus := h.checkDatabase()
+    dbStatus := h.checkDatabase(ctx)
     dependencies = append(dependencies, gin.H{
         "name":     "postgresql",
         "status":   dbStatus["status"],
@@ -107,7 +108,7 @@ func (h *HealthHandler) checkDependencies() []gin.H {
     })
 
     // Check Redis
-    redisStatus := h.checkRedis()
+    redisStatus := h.checkRedis(ctx)
     dependencies = append(dependencies, gin.H{
         "name":     "redis",
         "status":   redisStatus["status"],
@@ -118,12 +119,12 @@ func (h *HealthHandler) checkDependencies() []gin.H {
     return dependencies
 }
 
-// checkDatabase checks PostgreSQL connection and basic functionality
-func (h *HealthHandler) checkDatabase() gin.H {
+// checkDatabase checks PostgreSQL connection and basic functionality - FIXED: Added ctx parameter
+func (h *HealthHandler) checkDatabase(ctx context.Context) gin.H {
     start := time.Now()
     
-    // Check basic connectivity
-    err := h.db.Health(c.Request.Context())
+    // Check basic connectivity - FIXED: Use ctx parameter instead of c.Request.Context()
+    err := h.db.Health(ctx)
     duration := time.Since(start)
 
     if err != nil {
@@ -152,12 +153,15 @@ func (h *HealthHandler) checkDatabase() gin.H {
     }
 }
 
-// checkRedis checks Redis connection and basic functionality
-func (h *HealthHandler) checkRedis() gin.H {
+// checkRedis checks Redis connection and basic functionality - FIXED
+func (h *HealthHandler) checkRedis(ctx context.Context) gin.H {
     start := time.Now()
     
+    // ✅ FIXED: Use GetClient() to access underlying Redis client methods
+    client := h.redisClient.GetClient()
+    
     // Ping Redis
-    err := h.redisClient.Ping(c.Request.Context()).Err()
+    err := client.Ping(ctx).Err()
     duration := time.Since(start)
 
     if err != nil {
@@ -169,13 +173,18 @@ func (h *HealthHandler) checkRedis() gin.H {
         }
     }
 
-    // Get Redis info
-    info := h.redisClient.Info(c.Request.Context(), "server", "memory", "stats")
+    // Get Redis info - basic info only to avoid too much data
+    infoCmd := client.Info(ctx, "server")
+    infoResult := ""
+    if infoCmd.Err() == nil {
+        infoResult = infoCmd.Val()
+    }
     
     return gin.H{
         "status":      "ok",
         "duration_ms": duration.Milliseconds(),
-        "info":        info.Val(), // This might be too verbose, consider parsing specific fields
+        "connected":   true,
+        "info":        infoResult, // Basic server info
     }
 }
 
@@ -183,6 +192,11 @@ func (h *HealthHandler) checkRedis() gin.H {
 func (h *HealthHandler) Metrics(c *gin.Context) {
     // Get database metrics
     dbStats := h.db.GetStats()
+    
+    // Get basic Redis status
+    ctx := c.Request.Context()
+    client := h.redisClient.GetClient()
+    redisConnected := client.Ping(ctx).Err() == nil
     
     metrics := gin.H{
         "timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -194,7 +208,10 @@ func (h *HealthHandler) Metrics(c *gin.Context) {
             "wait_duration":   dbStats.WaitDuration.String(),
         },
         "redis": gin.H{
-            "status": "connected", // Simple status for now
+            "connected": redisConnected,
+        },
+        "uptime": gin.H{
+            "started_at": time.Now().Add(-1 * time.Hour).Format(time.RFC3339), // Placeholder
         },
     }
 
@@ -210,5 +227,45 @@ func (h *HealthHandler) Version(c *gin.Context) {
         "commit":     "unknown",
         "build_time": "unknown",
         "go_version": "unknown",
+    })
+}
+
+// Status returns detailed service status (combines health + metrics)
+func (h *HealthHandler) Status(c *gin.Context) {
+    ctx := c.Request.Context()
+    dependencies := h.checkDependencies(ctx)
+    dbStats := h.db.GetStats()
+    
+    // Determine overall status
+    status := "healthy"
+    for _, dep := range dependencies {
+        if dep["status"] != "ok" {
+            if dep["critical"].(bool) {
+                status = "unhealthy"
+                break
+            } else {
+                status = "degraded"
+            }
+        }
+    }
+    
+    statusCode := http.StatusOK
+    if status == "unhealthy" {
+        statusCode = http.StatusServiceUnavailable
+    }
+    
+    c.JSON(statusCode, gin.H{
+        "service":      "stories-backend",
+        "version":      "1.0.0",
+        "status":       status,
+        "timestamp":    time.Now().UTC().Format(time.RFC3339),
+        "dependencies": dependencies,
+        "metrics": gin.H{
+            "database": gin.H{
+                "open_connections": dbStats.OpenConnections,
+                "in_use":          dbStats.InUse,
+                "idle":            dbStats.Idle,
+            },
+        },
     })
 }

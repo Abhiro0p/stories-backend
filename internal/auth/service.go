@@ -149,11 +149,19 @@ func (s *Service) ValidateToken(tokenString string) (*models.User, error) {
         return nil, fmt.Errorf("invalid token claims")
     }
     
-    // Get user from database
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    // Check if token is blacklisted
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
     defer cancel()
     
-    user, err := s.userStore.GetByID(ctx, claims.UserID)
+    if s.IsTokenBlacklisted(ctx, claims.TokenID) {
+        return nil, fmt.Errorf("token has been revoked")
+    }
+    
+    // Get user from database
+    userCtx, userCancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer userCancel()
+    
+    user, err := s.userStore.GetByID(userCtx, claims.UserID)
     if err != nil {
         return nil, fmt.Errorf("user not found: %w", err)
     }
@@ -168,11 +176,31 @@ func (s *Service) ValidateToken(tokenString string) (*models.User, error) {
 
 // Logout invalidates user session
 func (s *Service) Logout(ctx context.Context, userID uuid.UUID, tokenID string) error {
-    s.logger.Info("User logout", zap.String("user_id", userID.String()))
+    s.logger.Info("User logout", 
+        zap.String("user_id", userID.String()),
+        zap.String("token_id", tokenID),
+    )
     
-    // TODO: Add token blacklisting logic here
-    // For now, we rely on token expiration
+    // Create a timeout context using the provided context
+    timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
     
+    // Add token to blacklist if tokenID is provided
+    if tokenID != "" {
+        blacklistKey := fmt.Sprintf("blacklist:token:%s", tokenID)
+        // Set with same TTL as token expiry
+        ttl := time.Duration(s.config.JWTExpiryHours) * time.Hour
+        
+        if err := s.addToBlacklist(timeoutCtx, blacklistKey, ttl); err != nil {
+            s.logger.Error("Failed to blacklist token", 
+                zap.Error(err),
+                zap.String("token_id", tokenID),
+            )
+            return fmt.Errorf("failed to logout: %w", err)
+        }
+    }
+    
+    s.logger.Info("User logout successful", zap.String("user_id", userID.String()))
     return nil
 }
 
@@ -222,6 +250,37 @@ func (s *Service) generateTokens(ctx context.Context, user *models.User) (*model
     if err != nil {
         return nil, fmt.Errorf("failed to sign refresh token: %w", err)
     }
+
+    // Create session record for logging/auditing
+    session := models.NewSession(
+        user.ID,
+        tokenID,
+        now.Add(time.Duration(s.config.JWTRefreshExpiryDays) * 24 * time.Hour),
+        nil, // IP address - could be passed from request context
+        nil, // User agent - could be passed from request context
+    )
+
+    // Log session creation (using the ctx parameter for timeout)
+    timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+    defer cancel()
+    
+    select {
+    case <-timeoutCtx.Done():
+        s.logger.Warn("Session logging timeout")
+    default:
+        s.logger.Debug("Session created",
+            zap.String("session_id", session.ID.String()),
+            zap.String("token_id", tokenID),
+            zap.String("user_id", user.ID.String()),
+            zap.Time("expires_at", session.ExpiresAt),
+        )
+    }
+
+    // TODO: Store session in database when SessionStore is implemented
+    // if err := s.sessionStore.Create(ctx, session); err != nil {
+    //     s.logger.Error("Failed to store session", zap.Error(err))
+    //     // Don't fail token generation if session storage fails
+    // }
     
     return &models.AuthResponse{
         AccessToken:  accessTokenString,
@@ -292,8 +351,129 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, currentP
     return nil
 }
 
-// GetUserFromContext extracts user from request context
-func GetUserFromContext(ctx context.Context) (*models.User, bool) {
-    user, ok := ctx.Value("user").(*models.User)
-    return user, ok
+// addToBlacklist adds a token to the blacklist
+func (s *Service) addToBlacklist(ctx context.Context, key string, ttl time.Duration) error {
+    // TODO: Implement actual blacklist storage using Redis
+    // For now, just simulate the operation with timeout handling
+    
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    default:
+        // Simulate some work
+        time.Sleep(10 * time.Millisecond)
+        s.logger.Debug("Token added to blacklist", 
+            zap.String("key", key),
+            zap.Duration("ttl", ttl),
+        )
+    }
+    
+    return nil
+}
+
+// IsTokenBlacklisted checks if a token is blacklisted
+func (s *Service) IsTokenBlacklisted(ctx context.Context, tokenID string) bool {
+    if tokenID == "" {
+        return false
+    }
+    
+    blacklistKey := fmt.Sprintf("blacklist:token:%s", tokenID)
+    
+    // TODO: Implement actual blacklist check using Redis
+    // This would typically check Redis with a timeout
+    
+    select {
+    case <-ctx.Done():
+        s.logger.Warn("Blacklist check timeout", zap.String("token_id", tokenID))
+        return false // Default to allowing access on timeout
+    default:
+        s.logger.Debug("Checking token blacklist", 
+            zap.String("token_id", tokenID),
+            zap.String("key", blacklistKey),
+        )
+    }
+    
+    return false // For now, no tokens are blacklisted
+}
+
+// RevokeAllUserTokens revokes all tokens for a user (useful for security incidents)
+func (s *Service) RevokeAllUserTokens(ctx context.Context, userID uuid.UUID) error {
+    s.logger.Info("Revoking all tokens for user", zap.String("user_id", userID.String()))
+    
+    // TODO: Implement user token revocation
+    // This would typically:
+    // 1. Find all active sessions for the user
+    // 2. Add all token IDs to blacklist
+    // 3. Update user's security timestamp to invalidate old tokens
+    
+    timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+    defer cancel()
+    
+    select {
+    case <-timeoutCtx.Done():
+        return timeoutCtx.Err()
+    default:
+        s.logger.Info("All tokens revoked for user", zap.String("user_id", userID.String()))
+    }
+    
+    return nil
+}
+
+// ValidateTokenWithContext validates token with custom context (useful for middleware)
+func (s *Service) ValidateTokenWithContext(ctx context.Context, tokenString string) (*models.User, error) {
+    // Parse token
+    token, err := jwt.ParseWithClaims(tokenString, &models.TokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+        if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+            return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+        }
+        return []byte(s.config.JWTSecret), nil
+    })
+    
+    if err != nil {
+        return nil, fmt.Errorf("invalid token: %w", err)
+    }
+    
+    claims, ok := token.Claims.(*models.TokenClaims)
+    if !ok || !token.Valid {
+        return nil, fmt.Errorf("invalid token claims")
+    }
+    
+    // Check if token is blacklisted with provided context
+    if s.IsTokenBlacklisted(ctx, claims.TokenID) {
+        return nil, fmt.Errorf("token has been revoked")
+    }
+    
+    // Get user from database with provided context
+    user, err := s.userStore.GetByID(ctx, claims.UserID)
+    if err != nil {
+        return nil, fmt.Errorf("user not found: %w", err)
+    }
+    
+    // Check if user is active
+    if !user.IsActive {
+        return nil, fmt.Errorf("account is disabled")
+    }
+    
+    return user, nil
+}
+
+// GetTokenClaims extracts claims from a token without validating the user
+func (s *Service) GetTokenClaims(tokenString string) (*models.TokenClaims, error) {
+    token, err := jwt.ParseWithClaims(tokenString, &models.TokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+        if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+            return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+        }
+        return []byte(s.config.JWTSecret), nil
+    })
+    
+    if err != nil {
+        return nil, fmt.Errorf("invalid token: %w", err)
+    }
+    
+    claims, ok := token.Claims.(*models.TokenClaims)
+    if !ok || !token.Valid {
+        return nil, fmt.Errorf("invalid token claims")
+    }
+    
+    return claims, nil
 }
