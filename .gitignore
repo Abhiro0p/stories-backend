@@ -245,10 +245,6 @@ monitoring/local/
 # Backup configurations
 backup-config/
 
-# Local storage
-storage/
-uploads/
-media/
 
 # Local documentation builds
 site/
