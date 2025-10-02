@@ -1,0 +1,130 @@
+groups:
+- name: stories-backend-alerts
+  rules:
+  # High error rate
+  - alert: HighErrorRate
+    expr: rate(http_requests_total{status_code=~"5.."}[5m]) > 0.1
+    for: 5m
+    labels:
+      severity: warning
+      service: stories-api
+    annotations:
+      summary: "High error rate detected"
+      description: "Error rate is {{ $value }} errors per second"
+
+  # High response time
+  - alert: HighResponseTime
+    expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
+    for: 5m
+    labels:
+      severity: warning
+      service: stories-api
+    annotations:
+      summary: "High response time detected"
+      description: "95th percentile response time is {{ $value }}s"
+
+  # Database connection issues
+  - alert: DatabaseConnectionHigh
+    expr: database_connections_active / database_connections_max > 0.8
+    for: 2m
+    labels:
+      severity: warning
+      service: postgres
+    annotations:
+      summary: "Database connection pool usage high"
+      description: "Database connection usage is {{ $value }}%"
+
+  # Redis memory usage
+  - alert: RedisMemoryHigh
+    expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+    for: 5m
+    labels:
+      severity: warning
+      service: redis
+    annotations:
+      summary: "Redis memory usage high"
+      description: "Redis memory usage is {{ $value }}%"
+
+  # API service down
+  - alert: APIServiceDown
+    expr: up{job="stories-api"} == 0
+    for: 1m
+    labels:
+      severity: critical
+      service: stories-api
+    annotations:
+      summary: "Stories API service is down"
+      description: "Stories API service has been down for more than 1 minute"
+
+  # Worker service down
+  - alert: WorkerServiceDown
+    expr: up{job="stories-worker"} == 0
+    for: 2m
+    labels:
+      severity: warning
+      service: stories-worker
+    annotations:
+      summary: "Stories Worker service is down"
+      description: "Stories Worker service has been down for more than 2 minutes"
+
+  # High CPU usage
+  - alert: HighCPUUsage
+    expr: rate(process_cpu_seconds_total[5m]) * 100 > 80
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage detected"
+      description: "CPU usage is {{ $value }}%"
+
+  # High memory usage
+  - alert: HighMemoryUsage
+    expr: process_resident_memory_bytes / 1024 / 1024 > 500
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage detected"
+      description: "Memory usage is {{ $value }}MB"
+
+  # WebSocket connection issues
+  - alert: WebSocketConnectionsHigh
+    expr: websocket_connections_active > 1000
+    for: 5m
+    labels:
+      severity: info
+    annotations:
+      summary: "High WebSocket connections"
+      description: "WebSocket connections: {{ $value }}"
+
+  # Story creation rate anomaly
+  - alert: StoryCreationRateAnomaly
+    expr: rate(stories_created_total[5m]) > 100
+    for: 2m
+    labels:
+      severity: info
+    annotations:
+      summary: "High story creation rate"
+      description: "Story creation rate: {{ $value }} per second"
+
+- name: infrastructure-alerts
+  rules:
+  # Disk space
+  - alert: DiskSpaceLow
+    expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 10
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low disk space"
+      description: "Disk space is {{ $value }}% full"
+
+  # Load average
+  - alert: HighLoadAverage
+    expr: node_load1 > 2
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High load average"
+      description: "Load average is {{ $value }}"

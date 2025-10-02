@@ -1,0 +1,194 @@
+# Prometheus configuration for Stories Backend monitoring
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'stories-backend'
+    replica: 'prometheus-1'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Stories Backend API instances
+  - job_name: 'stories-api'
+    static_configs:
+      - targets: 
+          - 'stories-api-1:9090'
+          - 'stories-api-2:9090'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    honor_labels: true
+    params:
+      format: ['prometheus']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: stories-api:9090
+
+  # Stories Backend Workers
+  - job_name: 'stories-worker'
+    static_configs:
+      - targets: 
+          - 'stories-worker:9090'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+
+  # PostgreSQL Database (using postgres_exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'stories-postgres'
+
+  # Redis (using redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'stories-redis'
+
+  # MinIO (S3-compatible storage)
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:9000']
+    scrape_interval: 30s
+    metrics_path: /minio/v2/metrics/cluster
+    scheme: http
+
+  # Node Exporter (system metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: 
+          - 'node-exporter:9100'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '(.+):(.+)'
+        target_label: __address__
+        replacement: '${1}:9100'
+      - source_labels: [__address__]
+        regex: '(.+):(.+)'
+        target_label: instance
+        replacement: '${1}'
+
+  # cAdvisor (container metrics)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Nginx (if using nginx as load balancer)
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx-exporter:9113']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Blackbox Exporter (endpoint monitoring)
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://stories-api-1:8080/health
+          - http://stories-api-2:8080/health
+          - https://api.yourdomain.com/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Custom application metrics discovery
+  - job_name: 'service-discovery'
+    consul_sd_configs:
+      - server: 'consul:8500'
+        services: ['stories-api', 'stories-worker']
+    relabel_configs:
+      - source_labels: [__meta_consul_service]
+        target_label: job
+      - source_labels: [__meta_consul_node]
+        target_label: instance
+      - source_labels: [__meta_consul_service_port]
+        target_label: __address__
+        replacement: '${__meta_consul_address}:${1}'
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus/data
+    retention.time: 30d
+    retention.size: 10GB
+    wal-compression: true
+
+# Web configuration
+web:
+  console.templates: /etc/prometheus/consoles
+  console.libraries: /etc/prometheus/console_libraries
+  enable-lifecycle: true
+  enable-admin-api: true
+  max-connections: 512
+  read-timeout: 30s
+
+# Tracing configuration (optional)
+tracing:
+  endpoint: "jaeger:14268/api/traces"
+  insecure: true
+
+# Remote write configuration (optional - for long-term storage)
+remote_write:
+  - url: "https://prometheus-remote-storage.yourdomain.com/api/v1/write"
+    headers:
+      Authorization: "Bearer <token>"
+    queue_config:
+      max_samples_per_send: 1000
+      max_shards: 200
+      capacity: 2500
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.*|process_.*|promhttp_.*'
+        action: drop
+
+# Remote read configuration (optional)
+remote_read:
+  - url: "https://prometheus-remote-storage.yourdomain.com/api/v1/read"
+    headers:
+      Authorization: "Bearer <token>"
+    read_recent: true

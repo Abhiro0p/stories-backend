@@ -1,0 +1,302 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+
+# Log files
+*.log
+logs/
+log/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Test coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+build/
+_build/
+.build/
+
+# Docker
+.dockerignore
+
+# Kubernetes
+*.kubeconfig
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+ssl/
+certs/
+
+# Configuration files with secrets
+config.json
+config.yaml
+secrets.yaml
+
+# Backup files
+*.backup
+*.bak
+
+# Cache directories
+.cache/
+cache/
+
+# Node.js (if using for tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (if using for scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Local database dumps
+*.sql
+*.dump
+
+# Documentation build
+docs/_build/
+
+# Mac
+.AppleDouble
+.LSOverride
+
+# Windows
+*.lnk
+
+# Linux
+*~
+
+# JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+Session.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Local configuration override files
+local.env
+local.config.json
+local.config.yaml
+
+# Migration files with sensitive data
+*_sensitive_*.sql
+
+# Profiling files
+*.pprof
+*.prof
+
+# Air (Go live reload tool)
+.air.toml
+tmp/
+
+# Wire (dependency injection)
+wire_gen.go
+
+# Mockgen generated files
+*_mock.go
+mock_*.go
+
+# Protocol buffer generated files
+*.pb.go
+*.pb.gw.go
+
+# Swagger/OpenAPI generated files
+docs/swagger.json
+docs/swagger.yaml
+
+# Local development scripts
+run.sh
+start.sh
+stop.sh
+
+# Database migration state
+.migrate/
+
+# Local MinIO data
+minio-data/
+
+# Local Redis data
+redis-data/
+
+# Local PostgreSQL data
+postgres-data/
+
+# Kubernetes local configs
+k8s-local/
+*.local.yaml
+
+# Terraform state files (if using for infrastructure)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Ansible vault files
+vault.yml
+*.vault.yml
+
+# Local scripts and utilities
+scripts/local/
+utils/local/
+
+# Performance test results
+performance/
+load-test-results/
+
+# Security scan results
+security-scan/
+*.sarif
+
+# Local development certificates
+dev-certs/
+
+# Grafana dashboard exports
+grafana/
+
+# Prometheus data
+prometheus-data/
+
+# Local monitoring stack
+monitoring/local/
+
+# Backup configurations
+backup-config/
+
+# Local storage
+storage/
+uploads/
+media/
+
+# Local documentation builds
+site/
+public/
+_site/
+
+# Jekyll (if using for docs)
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+
+# Hugo (if using for docs)
+resources/_gen/
+
+# Local API testing
+*.http
+*.rest
+insomnia/
+postman/
+
+# Local benchmarks
+benchmarks/
+bench/
+
+# Integration test artifacts
+integration-tests/artifacts/
+
+# Local secrets management
+.secrets/
+secrets/
+
+# Development database seeding
+seed-data/local/
+
+# Local container data
+containers/
+volumes/
+
+# CI/CD local artifacts
+.github/local/
+.gitlab-ci-local/
+
+# Local Helm charts
+charts/local/
+
+# Skaffold
+skaffold.yaml.local
+
+# Draft
+draft.toml
+charts/

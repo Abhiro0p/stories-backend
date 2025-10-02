@@ -1,0 +1,234 @@
+version: '3.8'
+
+networks:
+  stories-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: stories-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stories_db
+      POSTGRES_USER: stories_user
+      POSTGRES_PASSWORD: stories_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - stories-network
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stories_user -d stories_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: stories-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - stories-network
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # MinIO Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: stories-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    volumes:
+      - minio-data:/data
+    networks:
+      - stories-network
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Stories Backend API
+  stories-api:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.api
+    container_name: stories-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      # Server Configuration
+      PORT: 8080
+      GIN_MODE: debug
+      API_PREFIX: /api/v1
+      
+      # Database
+      DATABASE_URL: postgresql://stories_user:stories_pass@postgres:5432/stories_db?sslmode=disable
+      DB_MAX_OPEN_CONNS: 25
+      DB_MAX_IDLE_CONNS: 5
+      DB_MAX_LIFETIME: 1800s
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      
+      # JWT
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production
+      JWT_EXPIRY_HOURS: 24
+      JWT_REFRESH_EXPIRY_DAYS: 7
+      
+      # MinIO
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: stories-media
+      MINIO_USE_SSL: false
+      MINIO_REGION: us-east-1
+      
+      # Features
+      FEATURE_STORY_REACTIONS: true
+      FEATURE_STORY_VIEWS: true
+      FEATURE_USER_FOLLOW: true
+      FEATURE_REAL_TIME_NOTIFICATIONS: true
+      
+      # Rate Limiting
+      RATE_LIMIT_REQUESTS_PER_MINUTE: 60
+      RATE_LIMIT_BURST: 10
+      
+      # Logging
+      LOG_LEVEL: debug
+      LOG_FORMAT: json
+      
+      # CORS
+      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8080
+      CORS_ALLOWED_METHODS: GET,POST,PUT,DELETE,OPTIONS
+      CORS_ALLOWED_HEADERS: Origin,Content-Type,Accept,Authorization
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - stories-network
+    ports:
+      - "8080:8080"
+      - "9090:9090"  # Metrics
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Stories Backend Worker
+  stories-worker:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile.worker
+    container_name: stories-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: postgresql://stories_user:stories_pass@postgres:5432/stories_db?sslmode=disable
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      
+      # Worker Configuration
+      WORKER_POLL_INTERVAL: 30s
+      WORKER_BATCH_SIZE: 100
+      EXPIRATION_WORKER_ENABLED: true
+      QUEUE_WORKER_ENABLED: true
+      
+      # Logging
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - stories-network
+
+  # Prometheus Monitoring (Optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: stories-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./deployments/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - stories-network
+    ports:
+      - "9090:9090"
+    profiles:
+      - monitoring
+
+  # Grafana Dashboard (Optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: stories-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - stories-network
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+

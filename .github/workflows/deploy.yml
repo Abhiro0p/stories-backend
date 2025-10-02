@@ -1,0 +1,198 @@
+name: Deploy to Production
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  DOCKER_REGISTRY: ghcr.io
+  DOCKER_NAMESPACE: ${{ github.repository_owner }}
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    if: github.event.inputs.environment == 'staging' || (startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-rc'))
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to staging
+      env:
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_STAGING }}
+        DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+        JWT_SECRET: ${{ secrets.STAGING_JWT_SECRET }}
+        MINIO_ACCESS_KEY: ${{ secrets.STAGING_MINIO_ACCESS_KEY }}
+        MINIO_SECRET_KEY: ${{ secrets.STAGING_MINIO_SECRET_KEY }}
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Update image tags in manifests
+        sed -i "s|image: ghcr.io.*:latest|image: ghcr.io/${{ env.DOCKER_NAMESPACE }}/stories-backend-api:${{ github.sha }}|g" deployments/k8s/deployment.yaml
+        
+        # Apply configurations
+        kubectl apply -f deployments/k8s/namespace.yaml
+        kubectl apply -f deployments/k8s/configmap.yaml
+        
+        # Update secrets
+        kubectl create secret generic stories-backend-secret \
+          --from-literal=database-url="${DATABASE_URL}" \
+          --from-literal=redis-url="${REDIS_URL}" \
+          --from-literal=jwt-secret="${JWT_SECRET}" \
+          --from-literal=minio-access-key="${MINIO_ACCESS_KEY}" \
+          --from-literal=minio-secret-key="${MINIO_SECRET_KEY}" \
+          --namespace=stories-backend \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Deploy application
+        kubectl apply -f deployments/k8s/deployment.yaml
+        kubectl apply -f deployments/k8s/service.yaml
+        kubectl apply -f deployments/k8s/ingress.yaml
+        kubectl apply -f deployments/k8s/hpa.yaml
+        
+        # Wait for deployment
+        kubectl rollout status deployment/stories-backend-api -n stories-backend --timeout=300s
+        kubectl rollout status deployment/stories-backend-worker -n stories-backend --timeout=300s
+
+    - name: Run health check
+      run: |
+        sleep 30
+        curl -f https://staging-api.yourdomain.com/health
+
+    - name: Notify Slack
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  deploy-production:
+    name: Deploy to Production
+    if: github.event.inputs.environment == 'production' || (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-rc'))
+    runs-on: ubuntu-latest
+    environment: production
+    needs: deploy-staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Pre-deployment backup
+      env:
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+        DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Create database backup
+        kubectl create job backup-$(date +%Y%m%d-%H%M%S) \
+          --from=cronjob/database-backup \
+          --namespace=stories-backend || true
+
+    - name: Deploy to production
+      env:
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+        DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
+        JWT_SECRET: ${{ secrets.PRODUCTION_JWT_SECRET }}
+        MINIO_ACCESS_KEY: ${{ secrets.PRODUCTION_MINIO_ACCESS_KEY }}
+        MINIO_SECRET_KEY: ${{ secrets.PRODUCTION_MINIO_SECRET_KEY }}
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Update image tags in manifests
+        sed -i "s|image: ghcr.io.*:latest|image: ghcr.io/${{ env.DOCKER_NAMESPACE }}/stories-backend-api:${{ github.ref_name }}|g" deployments/k8s/deployment.yaml
+        
+        # Apply configurations
+        kubectl apply -f deployments/k8s/namespace.yaml
+        kubectl apply -f deployments/k8s/configmap.yaml
+        
+        # Update secrets
+        kubectl create secret generic stories-backend-secret \
+          --from-literal=database-url="${DATABASE_URL}" \
+          --from-literal=redis-url="${REDIS_URL}" \
+          --from-literal=jwt-secret="${JWT_SECRET}" \
+          --from-literal=minio-access-key="${MINIO_ACCESS_KEY}" \
+          --from-literal=minio-secret-key="${MINIO_SECRET_KEY}" \
+          --namespace=stories-backend \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Rolling deployment
+        kubectl apply -f deployments/k8s/deployment.yaml
+        kubectl apply -f deployments/k8s/service.yaml
+        kubectl apply -f deployments/k8s/ingress.yaml
+        kubectl apply -f deployments/k8s/hpa.yaml
+        
+        # Wait for deployment with longer timeout for production
+        kubectl rollout status deployment/stories-backend-api -n stories-backend --timeout=600s
+        kubectl rollout status deployment/stories-backend-worker -n stories-backend --timeout=600s
+
+    - name: Run smoke tests
+      run: |
+        sleep 60
+        
+        # Health check
+        curl -f https://api.yourdomain.com/health
+        
+        # Basic API test
+        curl -f https://api.yourdomain.com/api/v1/health
+        
+        # WebSocket test (basic connectivity)
+        timeout 10s wscat -c wss://api.yourdomain.com/ws || true
+
+    - name: Post-deployment verification
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # Check pod status
+        kubectl get pods -n stories-backend
+        
+        # Check HPA status
+        kubectl get hpa -n stories-backend
+        
+        # Check service endpoints
+        kubectl get endpoints -n stories-backend
+
+    - name: Notify Slack
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
