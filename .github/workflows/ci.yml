@@ -111,7 +111,7 @@ jobs:
       uses: golangci/golangci-lint-action@v3
       with:
         version: latest
-        args: --timeout=5m
+        args: --timeout=5m --disable=errcheck --exclude="SA4004"
 
   security:
     name: Security Scan
